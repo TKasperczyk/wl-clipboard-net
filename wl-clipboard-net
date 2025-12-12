@@ -1,0 +1,154 @@
+#!/bin/bash
+# wl-clipboard-net - Bidirectional clipboard sync for Wayland over network
+# https://github.com/luthriel/wl-clipboard-net
+
+set -euo pipefail
+
+VERSION="1.0.0"
+CONFIG_FILE="${XDG_CONFIG_HOME:-$HOME/.config}/wl-clipboard-net/config"
+
+# Defaults
+REMOTE_HOST=""
+SEND_PORT="9998"
+RECV_PORT="9999"
+POLL_INTERVAL="0.5"
+
+usage() {
+    cat <<EOF
+wl-clipboard-net v${VERSION} - Wayland clipboard sync over network
+
+Usage: wl-clipboard-net [OPTIONS]
+
+Options:
+  -r, --remote HOST    Remote host to sync with (required)
+  -s, --send-port N    Port to send clipboard to (default: 9998)
+  -l, --listen-port N  Port to listen for clipboard (default: 9999)
+  -i, --interval SEC   Poll interval in seconds (default: 0.5)
+  -c, --config FILE    Config file path
+  -h, --help           Show this help
+  -v, --version        Show version
+
+Config file (~/.config/wl-clipboard-net/config):
+  REMOTE_HOST=192.168.1.100
+  SEND_PORT=9998
+  RECV_PORT=9999
+  POLL_INTERVAL=0.5
+
+Example:
+  # On host (192.168.1.1), sync with VM (192.168.1.100):
+  wl-clipboard-net -r 192.168.1.100 -s 9999 -l 9998
+
+  # On VM, sync with host:
+  wl-clipboard-net -r 192.168.1.1 -s 9998 -l 9999
+
+Requirements:
+  - wl-clipboard (wl-copy, wl-paste)
+  - netcat (nc) - openbsd-netcat recommended
+  - Wayland compositor running
+EOF
+}
+
+check_deps() {
+    local missing=()
+    command -v wl-copy &>/dev/null || missing+=("wl-copy (wl-clipboard)")
+    command -v wl-paste &>/dev/null || missing+=("wl-paste (wl-clipboard)")
+    command -v nc &>/dev/null || missing+=("nc (netcat)")
+
+    if [[ ${#missing[@]} -gt 0 ]]; then
+        echo "Error: Missing dependencies: ${missing[*]}" >&2
+        exit 1
+    fi
+}
+
+load_config() {
+    if [[ -f "$CONFIG_FILE" ]]; then
+        # shellcheck source=/dev/null
+        source "$CONFIG_FILE"
+    fi
+}
+
+parse_args() {
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            -r|--remote)
+                REMOTE_HOST="$2"
+                shift 2
+                ;;
+            -s|--send-port)
+                SEND_PORT="$2"
+                shift 2
+                ;;
+            -l|--listen-port)
+                RECV_PORT="$2"
+                shift 2
+                ;;
+            -i|--interval)
+                POLL_INTERVAL="$2"
+                shift 2
+                ;;
+            -c|--config)
+                CONFIG_FILE="$2"
+                shift 2
+                ;;
+            -h|--help)
+                usage
+                exit 0
+                ;;
+            -v|--version)
+                echo "wl-clipboard-net v${VERSION}"
+                exit 0
+                ;;
+            *)
+                echo "Unknown option: $1" >&2
+                usage >&2
+                exit 1
+                ;;
+        esac
+    done
+}
+
+main() {
+    load_config
+    parse_args "$@"
+    check_deps
+
+    if [[ -z "$REMOTE_HOST" ]]; then
+        echo "Error: Remote host is required (-r/--remote)" >&2
+        usage >&2
+        exit 1
+    fi
+
+    cleanup() {
+        kill $(jobs -p) 2>/dev/null
+        exit 0
+    }
+    trap cleanup EXIT INT TERM
+
+    # Receiver loop (background)
+    (
+        while true; do
+            nc -l -p "$RECV_PORT" -N 2>/dev/null | {
+                data=$(cat)
+                [[ -n "$data" ]] && printf '%s' "$data" | wl-copy 2>/dev/null
+            }
+        done
+    ) &
+
+    echo "wl-clipboard-net: sending to $REMOTE_HOST:$SEND_PORT, receiving on :$RECV_PORT"
+
+    # Sender loop
+    last_hash=""
+    while true; do
+        sleep "$POLL_INTERVAL"
+        content=$(wl-paste 2>/dev/null) || continue
+        [[ -z "$content" ]] && continue
+
+        new_hash=$(printf '%s' "$content" | md5sum | cut -d' ' -f1)
+        [[ "$new_hash" == "$last_hash" ]] && continue
+        last_hash="$new_hash"
+
+        printf '%s' "$content" | nc -w 1 -N "$REMOTE_HOST" "$SEND_PORT" 2>/dev/null &
+    done
+}
+
+main "$@"

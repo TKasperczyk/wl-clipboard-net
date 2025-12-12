@@ -1,0 +1,12 @@
+[Unit]
+Description=Wayland clipboard sync over network
+After=graphical-session.target
+
+[Service]
+Type=simple
+ExecStart=%h/.local/bin/wl-clipboard-net
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=default.target
