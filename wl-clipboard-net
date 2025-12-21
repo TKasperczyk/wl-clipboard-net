@@ -118,6 +118,8 @@ main() {
         exit 1
     fi
 
+    RECEIVER_PID=""
+
     cleanup() {
         kill $(jobs -p) 2>/dev/null
         exit 0
@@ -133,13 +135,26 @@ main() {
             }
         done
     ) &
+    RECEIVER_PID=$!
 
     echo "wl-clipboard-net: sending to $REMOTE_HOST:$SEND_PORT, receiving on :$RECV_PORT"
 
-    # Sender loop
+    # Sender loop with receiver health check
     last_hash=""
+    check_counter=0
     while true; do
         sleep "$POLL_INTERVAL"
+
+        # Check receiver health every ~10 seconds (20 iterations at 0.5s)
+        ((check_counter++)) || true
+        if ((check_counter >= 20)); then
+            check_counter=0
+            if ! kill -0 "$RECEIVER_PID" 2>/dev/null; then
+                echo "wl-clipboard-net: receiver died, exiting for restart" >&2
+                exit 1
+            fi
+        fi
+
         content=$(wl-paste 2>/dev/null) || continue
         [[ -z "$content" ]] && continue
 
