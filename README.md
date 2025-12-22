@@ -105,7 +105,7 @@ Machine A                          Machine B
 
 ## Limitations
 
-- Text only (no images or files)
+- Text only (no images or files) - but local image clipboard is preserved when text arrives
 - No encryption (use on trusted networks or add SSH tunnel)
 - Requires both machines running Wayland
 

@@ -131,7 +131,12 @@ main() {
         while true; do
             nc -l -p "$RECV_PORT" -N 2>/dev/null | {
                 data=$(cat)
-                [[ -n "$data" ]] && printf '%s' "$data" | wl-copy 2>/dev/null
+                if [[ -n "$data" ]]; then
+                    # Don't overwrite if clipboard has image data
+                    if ! wl-paste --list-types 2>/dev/null | grep -qE "^image/"; then
+                        printf '%s' "$data" | wl-copy 2>/dev/null
+                    fi
+                fi
             }
         done
     ) &
